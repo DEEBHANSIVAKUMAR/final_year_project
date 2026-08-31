@@ -1,0 +1,20 @@
+# Virtual Light - Raspberry Pi Optimized
+# Tested on Raspberry Pi OS Bookworm (Python 3.11)
+
+# Core - always required
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# Lightweight hand tracking - RECOMMENDED for Pi 4/5
+# Uses MediaPipe Lite (model_complexity=0) ~15-25ms on Pi4, ~10-18ms on Pi5
+mediapipe==0.10.14
+
+# Optional - only for Pi Camera Module 3 / libcamera stack
+# Install via: sudo apt install -y python3-picamera2
+# picamera2 is NOT on pip for Pi; use apt
+
+# Optional - for TFLite alternative (not required, heavier)
+# tflite-runtime==2.14.0
+
+# Dev / calibration
+# matplotlib (for HSV calibration tool if needed)
