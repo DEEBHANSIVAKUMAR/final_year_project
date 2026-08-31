@@ -1,170 +1,160 @@
-# Real-time Virtual Light System — Raspberry Pi Optimized
+# Smart Wheelchair Direction Detection
 
-> **Priority: Real-Time Performance → Low Latency → Stable Tracking → Visual Quality**
-> Targets 20–30 FPS on Pi 4 / 30 FPS on Pi 5 with <50ms latency.
+A Raspberry Pi–based assistive-technology prototype that detects head movement through a camera and produces stable navigation commands for a smart wheelchair.
 
----
+The system uses **MediaPipe Face Mesh** facial landmarks and OpenCV head-pose estimation rather than face-box movement. It detects the user's head orientation and displays one of five commands:
+
+| Head movement | Display command |
+|---|---|
+| Turn left | `LEFT` |
+| Turn right | `RIGHT` |
+| Look up | `FORWARD` |
+| Look down | `BACKWARD` |
+| Face straight, no face, or unstable pose | `STOP` |
+
+> **Safety notice:** This repository currently displays direction commands only. It does **not** control motors or GPIO pins. Do not connect camera output directly to a wheelchair motor controller. A physical emergency-stop, manual control override, speed limits, obstacle detection, and hardware testing are required before any real mobility use.
 
 ## Features
-- Threaded camera (Picamera2 + V4L2 MJPG) with queue=1 → minimal lag
-- Dual tracker: **MediaPipe Hands Lite** (primary) + **HSV Color** (fallback, 3ms)
-- Downscaled detection (256×192 / 320×240) + frame skipping
-- Precomputed radial glow texture → per-frame cost ~0.8ms (no blur per frame)
-- One-Euro adaptive smoothing → no jitter, no lag
-- FPS + latency overlay, hot-switch `c`olor / `m`ediapipe, snapshot `s`
-- Profiles for Pi 5 / Pi 4 / Pi 4 Low (1GB) / PC debug
 
----
+- MediaPipe Face Mesh landmark tracking
+- Head-pose estimation using OpenCV `solvePnP`
+- Automatic centre-position calibration
+- Stable command confirmation across multiple frames
+- Fail-safe `STOP` when a face is missing, calibration is incomplete, or tracking is unstable
+- Raspberry Pi Camera / USB webcam support
+- Pi 5, Pi 4, low-end Pi, and PC-debug profiles
+- On-screen FPS, latency, pose, and wheelchair-command display
 
-## Architecture at a Glance
+## How It Works
 
-See [`ARCHITECTURE.md`](ARCHITECTURE.md) for full comparison (OpenCV vs MediaPipe vs TFLite vs YOLO) and performance budget.
-
-**Selected:** MediaPipe Hands Lite (`complexity=0`) for fingertip accuracy + HSV color fallback for ultra-low-end. Full diagram + latency budget in ARCHITECTURE.md:5.
-
+```text
+Camera frame
+    → MediaPipe Face Mesh
+    → Head-pose estimation (yaw / pitch)
+    → Centre calibration + smoothing
+    → Command confirmation
+    → LEFT / RIGHT / FORWARD / BACKWARD / STOP
 ```
-Camera (640×480 MJPG, queue=1) → Resize 256×192 → MediaPipe Lite / HSV → Scale + Smooth → Precomputed Glow ROI Blend → Display
-```
 
----
+At startup, the user keeps their face straight while the system records a neutral head pose. Future pose angles are measured relative to this calibrated centre. The default patient-control configuration deliberately requires a clear, sustained head turn before it shows a movement command. Small movement, an unstable pose, or lost face tracking immediately results in `STOP`.
 
-## Installation — Raspberry Pi OS Bookworm (64-bit)
+## Requirements
 
-### Quick start
+- Raspberry Pi 4 or Raspberry Pi 5 recommended
+- Raspberry Pi Camera Module or USB webcam
+- Raspberry Pi OS Bookworm (64-bit) recommended
+- Python 3.11+ on the Raspberry Pi
+
+Python packages are listed in [requirements.txt](requirements.txt):
+
+- `opencv-python`
+- `numpy`
+- `mediapipe==0.10.14`
+
+## Installation on Raspberry Pi
+
+Clone or copy this project to the Pi, then run:
+
 ```bash
+cd /path/to/final_year_project
 chmod +x install.sh
 ./install.sh
 source venv/bin/activate
-python main.py --profile pi5      # Pi 5
-# or
-python main.py --profile pi4      # Pi 4
-python main.py --profile pi4_low --backend color  # Pi 4 1GB / Pi 3B+ / Zero 2 W
 ```
 
-### Manual install
-```bash
-sudo apt update
-sudo apt install -y python3-pip python3-venv python3-picamera2 libcamera-apps python3-opencv v4l-utils
+The installer installs Raspberry Pi camera tools, OpenCV, NumPy, and MediaPipe.
 
-python3 -m venv venv --system-site-packages
+## Run the Project
+
+### Raspberry Pi 5 with Pi Camera
+
+```bash
 source venv/bin/activate
-pip install --upgrade pip
-pip install --extra-index-url https://www.piwheels.org/simple opencv-python numpy mediapipe==0.10.14
+python3 main.py --profile pi5 --backend face
 ```
 
-> `mediapipe==0.10.14` has piwheels ARM wheel; no build needed. If you use Pi Camera Module 3, `picamera2` must come from apt (not pip).
-
----
-
-## Usage
+### Raspberry Pi 4
 
 ```bash
-python main.py                          # defaults: pi5 + auto backend
-python main.py --profile pi4 --backend color
-python main.py --profile pc_debug       # on laptop/PC
-
-# Keys while running
-q / ESC  quit
-c        cycle light color
-m        toggle mediapipe ↔ color tracker
-s        save snapshot
+source venv/bin/activate
+python3 main.py --profile pi4 --backend face
 ```
 
-**Tune HSV color:** `python tools/calibrate_color.py` → copy `HSV_LOWER/UPPER` into `config.py`.
+### USB Webcam
 
-**Benchmark without camera:** `python benchmark.py --profile pi4 --backend color` (also tests mediapipe if installed).
+```bash
+source venv/bin/activate
+python3 main.py --profile pi5 --backend face --no-picamera2
+```
 
----
+### Low-end Pi profile
 
-## Dependencies
+```bash
+source venv/bin/activate
+python3 main.py --profile pi4_low --backend face --no-picamera2
+```
 
-| Package | Version | Purpose |
-|---|---|---|
-| `opencv-python` | 4.8+ | Capture, resize, blend, display (NEON accel) |
-| `numpy` | 1.24+ | Vectorized glow texture + smoothing |
-| `mediapipe` | 0.10.14 | Hands Lite detector (optional, fallback to color) |
-| `picamera2` | apt | Hardware-accelerated Pi camera (optional) |
-| `tflite-runtime` | 2.14 (optional) | Alternative if MediaPipe not available |
+## Controls
 
-Full list: `requirements.txt`
+| Key | Action |
+|---|---|
+| `r` | Reset calibration; keep the face straight again |
+| `q` or `Esc` | Quit |
+| `m` | Cycle tracking backends for testing |
+| `f` | Toggle face / hand tracking demo mode |
+| `s` | Save a camera snapshot |
 
----
+## Calibration and Testing
 
-## Performance Optimization Techniques (applied)
+1. Mount the camera securely in front of the user at face height.
+2. Start the application and face the camera straight for approximately 30 frames.
+3. Confirm that the display changes from `CALIBRATING` to `STOP`.
+4. Turn the head slowly in each direction and check the shown command.
+5. Press `r` whenever the seating position or camera position changes.
+6. If left/right or forward/backward appears reversed, adjust the inversion options in `config.py`.
 
-| # | Technique | Saving |
-|---|---|---|
-| 1 | Threaded capture + queue size 1 | ~30ms latency |
-| 2 | MJPG FourCC + `BUFFERSIZE=1` | 3× vs YUYV |
-| 3 | Picamera2 zero-copy on Pi 5 | 5–8ms |
-| 4 | Detect at 256×192 (6.2× fewer pixels) | ~6× speedup |
-| 5 | Frame skipping (detect every 2–3 frames) | 50–66% detector load |
-| 6 | Precomputed glow (blur once at init) | ~8ms/frame saved |
-| 7 | ROI-only blend (in-place, no full-frame copy) | 10× memory BW |
-| 8 | `cv2.setUseOptimized(True)` + `setNumThreads(2)` | 15–20% FPS |
-| 9 | Adaptive One-Euro smoother | jitter ↓ without lag |
-| 10 | RGB convert only for MediaPipe | saves 1 cvt per skipped frame |
+Test the commands on screen first. Do not use the system with a person seated in a powered wheelchair until a separately tested and supervised motor-control safety system is implemented.
 
----
+## Configuration
 
-## Camera Resolution & FPS Recommendations
+Main direction settings are in [config.py](config.py):
 
-| Hardware | Capture | Detect | Skip | Expect | Glow radius |
-|---|---|---|---|---|---|
-| Pi 5 8GB | 640×480 | 320×240 | 1 | 28–30 FPS | 80 |
-| Pi 4 4/8GB | 640×480 | 256×192 | 2 | 24–28 FPS | 60 |
-| Pi 4 2GB | 480×360 | 256×192 | 2 | 24 FPS | 60 |
-| Pi 4 1GB / 3B+ | 480×360 | 192×144 | 3 | 20 FPS | 50 (color backend) |
-| Zero 2 W | 480×360 | 192×144 | 3 | 15–20 FPS | 50 color only |
+```python
+HEAD_YAW_THRESHOLD = 30.0      # clear LEFT / RIGHT head turn required
+HEAD_PITCH_THRESHOLD = 22.0    # clear FORWARD / BACKWARD head tilt required
+COMMAND_CONFIRM_FRAMES = 15    # sustained frames required before movement command
+HEAD_DIRECTION_INVERT_X = False
+HEAD_DIRECTION_INVERT_Y = False
+```
 
-> Never use 1280×720 for this effect — no visual gain, 2.25× cost.
-
----
-
-## Latency Reduction Checklist
-
-- MJPG, `BUFFERSIZE=1`, threaded queue=1, small detect res, skip frames, precomputed texture, `waitKey(1)`, 64-bit OS, `arm_boost=1` (Pi 4), active cooling.
-
-## Light Rendering — Lightweight
-
-Radial gradient `falloff=(1 - dist/r)^1.8` blurred once with `σ=0.35·r`. Per frame: ROI `cv2.add` (NEON). Inner core = 2 circles. No per-frame blur, no shaders. See `virtual_light.py:14`.
-
----
-
-## Pi 4 vs Pi 5 Notes
-
-- **Pi 5** (A76 2.4GHz, 4267 MT/s RAM): MediaPipe Lite ~8–15ms, can do 320×240 every frame.
-- **Pi 4** (A72 1.5GHz): 12–22ms → must skip frames, use 256×192, active cooling to avoid throttling (80 °C). Overclock to 1.8GHz if stable (`arm_freq=1800` in `/boot/firmware/config.txt`).
-
----
-
-## Troubleshooting
-
-- `Cannot open camera` → check `v4l2-ctl --list-devices`, try `--camera 1`, ensure `libcamera-hello --timeout 1000` works for Pi camera.
-- Low FPS (<15) → `python benchmark.py`, then switch to `--backend color` or `--profile pi4_low`.
-- Jitter → lower `SMOOTHING_ALPHA` in `config.py` (0.4 = smoother, 0.8 = responsive).
-- Mediapipe not found → auto falls back to color tracker (needs green marker).
-
----
+- Increase a threshold if accidental commands occur.
+- Decrease a threshold only after careful controlled testing.
+- Increase `COMMAND_CONFIRM_FRAMES` for a more conservative response.
+- Set an inversion value to `True` if the corresponding direction is reversed on the installed camera.
 
 ## Project Structure
 
-```
+```text
 final_year_project/
-├── config.py            # profiles + tunables
-├── tracker.py           # MediaPipe + Color trackers + smoother
-├── virtual_light.py     # precomputed glow texture + blend
-├── main.py              # threaded camera + main loop + metrics
-├── benchmark.py         # synthetic benchmark (no camera)
-├── tools/calibrate_color.py  # HSV slider tuner
+├── main.py                    # Camera loop, command display, keyboard controls
+├── tracker.py                 # Face Mesh, head pose, calibration, command confirmation
+├── config.py                  # Hardware profiles and detection thresholds
+├── virtual_light.py           # Earlier visual-light demo component
+├── benchmark.py               # Performance benchmark utility
+├── tools/calibrate_color.py   # HSV colour-tracker calibration utility
 ├── requirements.txt
 ├── install.sh
-├── ARCHITECTURE.md      # full tech comparison + diagram
-└── README.md
+└── ARCHITECTURE.md             # Earlier virtual-light architecture notes
 ```
 
----
+## Future Work
+
+- Add an isolated motor-controller interface after hardware selection
+- Add physical emergency-stop and manual joystick override
+- Add obstacle detection with ultrasonic, LiDAR, or depth camera sensors
+- Add command timeout and maximum-speed enforcement at the motor-controller layer
+- Record test data to tune thresholds for individual users
 
 ## License
 
-MIT — use for final year project, cite MediaPipe & OpenCV.
+MIT License. This is an academic prototype and is not a certified medical or mobility device.
