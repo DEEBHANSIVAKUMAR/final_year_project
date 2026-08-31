@@ -15,46 +15,31 @@ The system uses **MediaPipe Face Mesh** facial landmarks and OpenCV head-pose es
 > **Safety notice:** This repository currently displays direction commands only. It does **not** control motors or GPIO pins. Do not connect camera output directly to a wheelchair motor controller. A physical emergency-stop, manual control override, speed limits, obstacle detection, and hardware testing are required before any real mobility use.
 
 ## Features
+- Threaded camera (Picamera2 + V4L2 MJPG) with queue=1 → minimal lag
+- Dual tracker: **MediaPipe Hands Lite** (primary) + **HSV Color** (fallback, 3ms)
+- Downscaled detection (256×192 / 320×240) + frame skipping
+- Precomputed radial glow texture → per-frame cost ~0.8ms (no blur per frame)
+- One-Euro adaptive smoothing → no jitter, no lag
+- FPS + latency overlay, hot-switch `c`olor / `m`ediapipe, snapshot `s`
+- Profiles for Pi 5 / Pi 4 / Pi 4 Low (1GB) / PC debug
 
-- MediaPipe Face Mesh landmark tracking
-- Head-pose estimation using OpenCV `solvePnP`
-- Automatic centre-position calibration
-- Stable command confirmation across multiple frames
-- Fail-safe `STOP` when a face is missing, calibration is incomplete, or tracking is unstable
-- Raspberry Pi Camera / USB webcam support
-- Pi 5, Pi 4, low-end Pi, and PC-debug profiles
-- On-screen FPS, latency, pose, and wheelchair-command display
+---
 
-## How It Works
+## Architecture at a Glance
 
-```text
-Camera frame
-    → MediaPipe Face Mesh
-    → Head-pose estimation (yaw / pitch)
-    → Centre calibration + smoothing
-    → Command confirmation
-    → LEFT / RIGHT / FORWARD / BACKWARD / STOP
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for full comparison (OpenCV vs MediaPipe vs TFLite vs YOLO) and performance budget.
+
+**Selected:** MediaPipe Hands Lite (`complexity=0`) for fingertip accuracy + HSV color fallback for ultra-low-end. Full diagram + latency budget in ARCHITECTURE.md:5.
+
+```
+Camera (640×480 MJPG, queue=1) → Resize 256×192 → MediaPipe Lite / HSV → Scale + Smooth → Precomputed Glow ROI Blend → Display
 ```
 
-At startup, the user keeps their face straight while the system records a neutral head pose. Future pose angles are measured relative to this calibrated centre. The default patient-control configuration deliberately requires a clear, sustained head turn before it shows a movement command. Small movement, an unstable pose, or lost face tracking immediately results in `STOP`.
+---
 
-## Requirements
+## Installation — Raspberry Pi OS Bookworm (64-bit)
 
-- Raspberry Pi 4 or Raspberry Pi 5 recommended
-- Raspberry Pi Camera Module or USB webcam
-- Raspberry Pi OS Bookworm (64-bit) recommended
-- Python 3.11+ on the Raspberry Pi
-
-Python packages are listed in [requirements.txt](requirements.txt):
-
-- `opencv-python`
-- `numpy`
-- `mediapipe==0.10.14`
-
-## Installation on Raspberry Pi
-
-Clone or copy this project to the Pi, then run:
-
+### Quick start
 ```bash
 cd /path/to/final_year_project
 chmod +x install.sh
@@ -115,22 +100,27 @@ python3 main.py --profile pi4_low --backend face --no-picamera2
 
 Test the commands on screen first. Do not use the system with a person seated in a powered wheelchair until a separately tested and supervised motor-control safety system is implemented.
 
-## Configuration
+## Light Rendering — Lightweight
 
-Main direction settings are in [config.py](config.py):
+Radial gradient `falloff=(1 - dist/r)^1.8` blurred once with `σ=0.35·r`. Per frame: ROI `cv2.add` (NEON). Inner core = 2 circles. No per-frame blur, no shaders. See `virtual_light.py:14`.
 
-```python
-HEAD_YAW_THRESHOLD = 30.0      # clear LEFT / RIGHT head turn required
-HEAD_PITCH_THRESHOLD = 22.0    # clear FORWARD / BACKWARD head tilt required
-COMMAND_CONFIRM_FRAMES = 15    # sustained frames required before movement command
-HEAD_DIRECTION_INVERT_X = False
-HEAD_DIRECTION_INVERT_Y = False
-```
+---
 
-- Increase a threshold if accidental commands occur.
-- Decrease a threshold only after careful controlled testing.
-- Increase `COMMAND_CONFIRM_FRAMES` for a more conservative response.
-- Set an inversion value to `True` if the corresponding direction is reversed on the installed camera.
+## Pi 4 vs Pi 5 Notes
+
+- **Pi 5** (A76 2.4GHz, 4267 MT/s RAM): MediaPipe Lite ~8–15ms, can do 320×240 every frame.
+- **Pi 4** (A72 1.5GHz): 12–22ms → must skip frames, use 256×192, active cooling to avoid throttling (80 °C). Overclock to 1.8GHz if stable (`arm_freq=1800` in `/boot/firmware/config.txt`).
+
+---
+
+## Troubleshooting
+
+- `Cannot open camera` → check `v4l2-ctl --list-devices`, try `--camera 1`, ensure `libcamera-hello --timeout 1000` works for Pi camera.
+- Low FPS (<15) → `python benchmark.py`, then switch to `--backend color` or `--profile pi4_low`.
+- Jitter → lower `SMOOTHING_ALPHA` in `config.py` (0.4 = smoother, 0.8 = responsive).
+- Mediapipe not found → auto falls back to color tracker (needs green marker).
+
+---
 
 ## Project Structure
 
