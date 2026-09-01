@@ -2,11 +2,16 @@
 # Tested on Raspberry Pi OS Bookworm (Python 3.11)
 
 # Core - always required
-opencv-python>=4.8.0
-numpy>=1.24.0
+# IMPORTANT: Do NOT install opencv-python-headless alongside opencv-python/openc-contrib.
+# headless conflicts with GUI (cv2.imshow) and breaks imshow on Windows/Pi desktop.
+# If you have headless installed: pip uninstall -y opencv-python-headless
+opencv-python==4.11.0.86
+numpy>=1.24.0,<2.0
 
-# Lightweight hand tracking - RECOMMENDED for Pi 4/5
-# Uses MediaPipe Lite (model_complexity=0) ~15-25ms on Pi4, ~10-18ms on Pi5
+# Lightweight tracking - PINNED to 0.10.14
+# mediapipe >=0.10.30 removed mp.solutions (breaks tracker.py:22) -> symptoms: FaceDirection/BodyDirection DISABLED, always STOP, 0/25 calib stuck
+# 0.10.14 is last version with solutions.face_mesh / pose / hands OR use tasks API migration
+# Pi: install via piwheels: pip install --extra-index-url https://www.piwheels.org/simple mediapipe==0.10.14
 mediapipe==0.10.14
 
 # Optional - only for Pi Camera Module 3 / libcamera stack

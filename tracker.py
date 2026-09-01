@@ -12,12 +12,34 @@ import os
 
 try:
     import mediapipe as mp
+    # mediapipe 0.10.30+ on Windows removes mp.solutions -> need 0.10.14
+    # Try to ensure mp.solutions exists
+    if not hasattr(mp, "solutions"):
+        try:
+            import mediapipe.solutions as _solutions  # type: ignore
+            mp.solutions = _solutions
+        except Exception as _e:
+            raise ImportError(
+                f"mediapipe {getattr(mp, '__version__', 'unknown')} has no 'solutions' module "
+                f"({_e}). This version is incompatible with tracker.py which uses "
+                "mp.solutions.face_mesh / pose / hands. Fix: pip uninstall -y mediapipe; pip install mediapipe==0.10.14"
+            )
     MP_AVAILABLE = True
-except ImportError:
+    MP_VERSION = getattr(mp, "__version__", "unknown")
+except ImportError as _mp_err:
     MP_AVAILABLE = False
+    MP_VERSION = None
+    MP_IMPORT_ERROR = str(_mp_err)
+    mp = None  # type: ignore
 
 print(f"RUNNING FILE: {os.path.abspath(__file__)}")
 print("VERSION: DIRECTION_DEBUG_V2")
+if not MP_AVAILABLE:
+    print(f"[tracker] MediaPipe NOT available: {MP_IMPORT_ERROR}")
+    print("[tracker] Direction detection (Face/Body) will be DISABLED -> always STOP")
+    print("[tracker] FIX: pip uninstall -y mediapipe opencv-python-headless && pip install mediapipe==0.10.14 opencv-python==4.11.0.86")
+else:
+    print(f"[tracker] MediaPipe {MP_VERSION} solutions OK")
 import config as config_mod
 from config import CFG, MEDIAPIPE_DETECTION_CONF, MEDIAPIPE_TRACKING_CONF, HSV_LOWER, HSV_UPPER, MIN_CONTOUR_AREA, FACE_SCALE_FACTOR, FACE_MIN_NEIGHBORS, FACE_MIN_SIZE_RATIO, ENABLE_HEAD_POSE, HEAD_YAW_THRESHOLD, HEAD_PITCH_THRESHOLD, HEAD_YAW_EXIT_THRESHOLD, HEAD_PITCH_EXIT_THRESHOLD, HEAD_SMOOTH_ALPHA, FACE_AUTO_CALIBRATE, FACE_CALIBRATE_FRAMES, FACE_CALIBRATE_SMOOTHING, FACE_CALIB_YAW_TOL, FACE_CALIB_PITCH_TOL, FACE_CALIB_ROLL_TOL, FACE_CALIB_FALLBACK_SEC, FACE_CALIB_TIMEOUT_SEC, FACE_CALIB_MIN_VALID, FACE_CALIB_DEBUG, FACE_CALIB_CONF_THRESH, HEAD_DIRECTION_HISTORY, COMMAND_CONFIRM_FRAMES, COMMAND_STOP_CONFIRM_FRAMES, HEAD_MISSING_TOLERANCE, HEAD_DIRECTION_INVERT_X, HEAD_DIRECTION_INVERT_Y, DEBUG_MODE, PERFORMANCE_MODE, ENABLE_BODY_POSE, BODY_YAW_ENTER_THRESHOLD, BODY_YAW_EXIT_THRESHOLD, BODY_PITCH_ENTER_THRESHOLD, BODY_PITCH_EXIT_THRESHOLD, BODY_SHOULDER_OFFSET_ENTER, BODY_SHOULDER_OFFSET_EXIT, BODY_POSE_CONF_THRESH, BODY_DIRECTION_HISTORY, BODY_SMOOTH_ALPHA, BODY_COMMAND_CONFIRM_FRAMES, BODY_MISSING_TOLERANCE, BODY_CALIB_FRAMES, BODY_CALIB_TIMEOUT_SEC, DEBUG_DIRECTION, BODY_DIRECTION_INVERT, DIRECTION_CONFIRM_FRAMES
 
@@ -56,7 +78,8 @@ class FaceTrackerHaar:
 # ---------- FACE POSE ----------
 class FaceDirectionTracker:
     def __init__(self):
-        if not MP_AVAILABLE: raise RuntimeError("MediaPipe required")
+        if not MP_AVAILABLE:
+            raise RuntimeError(f"MediaPipe not available: {MP_IMPORT_ERROR}. Install mediapipe==0.10.14")
         conf=float(FACE_CALIB_CONF_THRESH)
         self.face_mesh=mp.solutions.face_mesh.FaceMesh(static_image_mode=False,max_num_faces=1,refine_landmarks=False,min_detection_confidence=conf,min_tracking_confidence=conf)
         self.history=[]; self.hist_len=HEAD_DIRECTION_HISTORY
@@ -219,7 +242,8 @@ class FaceDirectionTracker:
 # ---------- BODY ----------
 class BodyDirectionTracker:
     def __init__(self):
-        if not MP_AVAILABLE: raise RuntimeError("MediaPipe required")
+        if not MP_AVAILABLE:
+            raise RuntimeError(f"MediaPipe not available: {MP_IMPORT_ERROR}. Install mediapipe==0.10.14")
         self.pose=mp.solutions.pose.Pose(static_image_mode=False,model_complexity=0,enable_segmentation=False,min_detection_confidence=float(BODY_POSE_CONF_THRESH),min_tracking_confidence=float(BODY_POSE_CONF_THRESH))
         self.history=[]; self.hist_len=int(BODY_DIRECTION_HISTORY)
         self.yaw_enter=float(BODY_YAW_ENTER_THRESHOLD); self.yaw_exit=float(BODY_YAW_EXIT_THRESHOLD)
@@ -379,7 +403,8 @@ HeadPoseTracker=FaceDirectionTracker
 
 class MediaPipeTracker:
     def __init__(self,complexity=0):
-        if not MP_AVAILABLE: raise RuntimeError("mediapipe")
+        if not MP_AVAILABLE:
+            raise RuntimeError(f"MediaPipe not available: {MP_IMPORT_ERROR}. Install mediapipe==0.10.14")
         self.mp_hands=mp.solutions.hands
         self.hands=self.mp_hands.Hands(static_image_mode=False,max_num_hands=1,model_complexity=complexity,min_detection_confidence=MEDIAPIPE_DETECTION_CONF,min_tracking_confidence=MEDIAPIPE_TRACKING_CONF)
     def detect(self,rgb_small):
