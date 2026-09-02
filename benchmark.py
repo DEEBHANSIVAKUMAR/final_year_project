@@ -35,6 +35,8 @@ def bench(profile="pi5", backend="color", n=100):
         cv2.circle(frame, (cx, cy), 20, (0,255,0), -1)
 
         t1 = time.perf_counter()
+        if isinstance(pt, dict):
+            pt = pt.get("face_center") or pt.get("hand")
         if pt is None:
             pt = (cx, cy)
         light.render(frame, pt)
@@ -54,8 +56,8 @@ def bench(profile="pi5", backend="color", n=100):
 if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser()
-    p.add_argument("--profile", default="pi5", choices=["pi5","pi4","pi4_low","pc_debug"])
-    p.add_argument("--backend", default="color", choices=["mediapipe","color","auto"])
+    p.add_argument("--profile", default="pi5")
+    p.add_argument("--backend", default="face")
     p.add_argument("--n", type=int, default=100)
     args = p.parse_args()
     bench(args.profile, args.backend, args.n)

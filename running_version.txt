@@ -1,2 +1,2 @@
-RUNNING FILE: D:\final_year\final_year_project\main.py
+RUNNING FILE: D:\fuly_ok\final_year_project\main.py
 VERSION: DIRECTION_DEBUG_V2

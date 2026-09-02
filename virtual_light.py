@@ -141,19 +141,6 @@ class VirtualLight:
         Cost: ~2-5ms (cached texture, fast BGR add)
         """
         if face_bbox is None and face_center is None:
-            if low_light:
-                try:
-                    from config import GLOBAL_BRIGHTNESS_GAIN, AMBIENT_FILL_ALPHA
-                    alpha = float(np.clip(AMBIENT_FILL_ALPHA * 0.85, 0.08, 0.38))
-                except:
-                    alpha = float(np.clip(0.12 + (125 - brightness)*0.0025, 0.10, 0.38))
-                # Also global brightness gain (makes whole image whiter)
-                self._ambient_fill(frame, alpha=alpha)
-                try:
-                    from config import GLOBAL_BRIGHTNESS_GAIN
-                    cv2.convertScaleAbs(frame, frame, alpha=1.08, beta=GLOBAL_BRIGHTNESS_GAIN*0.6)
-                except: pass
-                return frame
             return frame
 
         if face_bbox is not None:
@@ -185,23 +172,12 @@ class VirtualLight:
             self._blend_at(frame, (cx, cy), radius=int(r*0.32), intensity_scale=1.0)
 
         if low_light and face_bbox is not None:
-            pad = int(max(w, h) * 0.24)
-            x1 = max(0, x - pad)
-            y1 = max(0, y - pad)
-            x2 = min(frame.shape[1], x + w + pad)
-            y2 = min(frame.shape[0], y + h + pad)
-            roi = frame[y1:y2, x1:x2]
-            if roi.size > 0:
-                boost = int(np.clip(65 + (125 - brightness) * 0.85, 32, 95))
-                boosted = cv2.add(roi, np.array([boost, boost, boost], dtype=np.uint8))
-                cv2.addWeighted(boosted, 0.54, roi, 0.46, 0, roi)
-            # Global ambient + extra brightness gain for whole frame (much brighter)
             try:
-                from config import AMBIENT_FILL_ALPHA, GLOBAL_BRIGHTNESS_GAIN
-                self._ambient_fill(frame, alpha=AMBIENT_FILL_ALPHA*0.45)
-                cv2.convertScaleAbs(frame, frame, alpha=1.12, beta=GLOBAL_BRIGHTNESS_GAIN*0.7)
+                from config import AMBIENT_FILL_ALPHA
+                if AMBIENT_FILL_ALPHA > 0:
+                    self._ambient_fill(frame, alpha=AMBIENT_FILL_ALPHA * 0.5)
             except:
-                self._ambient_fill(frame, alpha=0.14)
+                pass
 
         # Subtle ring to indicate virtual light active (pure white)
         if face_bbox is not None:

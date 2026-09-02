@@ -24,6 +24,7 @@ import threading
 import queue
 import argparse
 import sys
+import numpy as np
 # --- PROOF THAT THIS FILE IS RUNNING (STEP 1) ---
 print(f"RUNNING FILE: {os.path.abspath(__file__)}")
 print("VERSION: DIRECTION_DEBUG_V2")
@@ -36,9 +37,11 @@ except:
 from collections import deque
 
 import config
-from config import get_config, TRACKER_BACKEND, SMOOTHING_ALPHA, SMOOTHING_BETA, LIGHT_COLOR_BGR, LIGHT_INTENSITY, LIGHT_BLEND_MODE, V4L2_FOURCC, CAMERA_FPS_REQUEST, LOW_LIGHT_THRESHOLD, FACE_LIGHT_COLOR_BGR, FACE_LIGHT_INTENSITY, ENABLE_HEAD_POSE, HEAD_SENSITIVITY, DEBUG_MODE, PERFORMANCE_MODE, FACE_CALIB_YAW_TOL, FACE_CALIB_PITCH_TOL, FACE_CALIB_ROLL_TOL, DEBUG_DIRECTION, DIRECTION_CONFIRM_FRAMES, BODY_DIRECTION_INVERT
+from config import get_config, TRACKER_BACKEND, SMOOTHING_ALPHA, SMOOTHING_BETA, LIGHT_COLOR_BGR, LIGHT_INTENSITY, LIGHT_BLEND_MODE, V4L2_FOURCC, CAMERA_FPS_REQUEST, LOW_LIGHT_THRESHOLD, FACE_LIGHT_COLOR_BGR, FACE_LIGHT_INTENSITY, ENABLE_HEAD_POSE, HEAD_SENSITIVITY, DEBUG_MODE, PERFORMANCE_MODE, FACE_CALIB_YAW_TOL, FACE_CALIB_PITCH_TOL, FACE_CALIB_ROLL_TOL, DEBUG_DIRECTION, DIRECTION_CONFIRM_FRAMES, BODY_DIRECTION_INVERT, ENABLE_SERIAL, SERIAL_PORT, SERIAL_BAUDRATE
 from tracker import HybridTracker
 from virtual_light import VirtualLight
+from serial_controller import ESP32SerialController
+
 
 # Try Picamera2
 try:
@@ -160,13 +163,18 @@ def draw_metrics(frame, fps, latency_ms, detect_ms, profile, backend):
 
 def parse_args():
     p = argparse.ArgumentParser(description="Virtual Light - Pi Optimized (Face Fill Light for low-light)")
-    p.add_argument("--profile", choices=["pi5", "pi4", "pi4_low", "pc_debug"], default=None, help="Hardware profile")
+    p.add_argument("--profile", choices=["pi5", "pi4", "pi4_low", "pi4_1gb", "pc_debug"], default=None, help="Hardware profile")
     p.add_argument("--backend", choices=["face", "mediapipe", "color", "auto"], default=None, help="Tracker backend: face=fill-light (default, perfect for low light), mediapipe=hand orb, color=HSV, auto=face->hand")
     p.add_argument("--mode", choices=["face", "hand", "auto"], default=None, help="Alias for backend - face mode glows on face detection")
     p.add_argument("--face-detector", choices=["haar", "mediapipe", "auto"], default="auto", help="Face detector: haar (~2ms, default) or mediapipe")
     p.add_argument("--camera", type=int, default=0, help="Camera index (V4L2)")
     p.add_argument("--no-picamera2", action="store_true", help="Force V4L2 even if picamera2 available")
+    p.add_argument("--serial-port", type=str, default=None, help="ESP32 serial port (e.g. COM13 or /dev/ttyUSB0)")
+    p.add_argument("--baudrate", type=int, default=115200, help="Serial baudrate (default: 115200)")
+    p.add_argument("--no-serial", action="store_true", help="Disable serial communication with ESP32")
     return p.parse_args()
+
+
 
 
 def main():
@@ -212,7 +220,17 @@ def main():
     # Dedicated face fill-light (warmer, softer) - shares texture logic but different color/intensity
     face_light = VirtualLight(radius=int(cfg["light_radius"]*1.4), color_bgr=FACE_LIGHT_COLOR_BGR, intensity=FACE_LIGHT_INTENSITY, mode=LIGHT_BLEND_MODE)
 
+    # ESP32 Serial Controller
+    serial_port = args.serial_port or SERIAL_PORT
+    serial_baudrate = args.baudrate or SERIAL_BAUDRATE
+    use_serial = ENABLE_SERIAL and not args.no_serial
+    serial_ctrl = None
+    if use_serial:
+        serial_ctrl = ESP32SerialController(port=serial_port, baudrate=serial_baudrate)
+
+
     # Metrics
+
     fps_hist = deque(maxlen=30)
     prev_time = time.perf_counter()
     # FPS calc
@@ -382,18 +400,14 @@ def main():
                         # small cross at calibrated CENTER
                         cx0, cy0 = int(calib[0]), int(calib[1])
                         cv2.drawMarker(frame, (cx0, cy0), (0,255,0), markerType=cv2.MARKER_CROSS, markerSize=8, thickness=1, line_type=cv2.LINE_AA)
-                elif hand_pt is not None:
+                elif hand_pt is not None and backend in ("mediapipe", "color"):
                     light.render(frame, hand_pt)
                     rendered = True
                     status_text = f"HAND orb | DIR:{primary_dir} | V:{mean_v:.0f}"
                 else:
-                    if low_light:
-                        face_light._ambient_fill(frame, alpha=0.13)
-                        status_text = f"LOW-LIGHT fill (no face) | V:{mean_v:.0f}"
-                    else:
-                        status_text = f"No face - show your face | V:{mean_v:.0f}"
-                    cv2.putText(frame, status_text, (cfg["camera_width"]//2 - 130, 60),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 255, 255) if low_light else (0,0,255), 1, cv2.LINE_AA)
+                    status_text = f"Searching face... | V:{mean_v:.0f}"
+                    cv2.putText(frame, "Position face in camera view", (cfg["camera_width"]//2 - 130, 60),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 255, 255), 1, cv2.LINE_AA)
             else:
                 pt = res
                 if pt is not None:
@@ -460,11 +474,12 @@ def main():
                     stop_reason = ""
                 elif not stop_reason:
                     stop_reason = "threshold not reached"
-                # Build panel background
+                # Build panel background (ROI slice blend for 0-copy performance)
                 panel_x, panel_y, panel_w, panel_h = 8, 80, 320, 210
-                overlay = frame.copy()
-                cv2.rectangle(overlay, (panel_x, panel_y), (panel_x+panel_w, panel_y+panel_h), (0,0,0), -1)
-                cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
+                panel_roi = frame[panel_y:panel_y+panel_h, panel_x:panel_x+panel_w]
+                if panel_roi.size > 0:
+                    bg_dark = np.zeros_like(panel_roi)
+                    cv2.addWeighted(bg_dark, 0.55, panel_roi, 0.45, 0, panel_roi)
                 y0 = panel_y + 14
                 line_h = 13
                 def put(txt, idx, col=(200,255,200)):
@@ -497,13 +512,18 @@ def main():
             if do_debug_overlay and 'status_text' in locals() and status_text:
                 cv2.putText(frame, status_text, (8, _cam_h-12),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200,255,200), 1, cv2.LINE_AA)
-            # Display-only: do not wire this directly to motors.
+            # Send direction command to ESP32 motor controller
+            if serial_ctrl:
+                serial_ctrl.send_command(command)
+                serial_ctrl.read_response()
+
             if do_debug_overlay and isinstance(res, dict):
                 # Use already simulated command, not raw res
                 disp_cmd = command
                 command_color = (0, 255, 0) if disp_cmd != "STOP" else (0, 0, 255)
                 cv2.putText(frame, f"WHEELCHAIR COMMAND: {disp_cmd}", (8, 58),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.62, command_color, 2, cv2.LINE_AA)
+
             # Face-direction compass overlay - skip in PERFORMANCE_MODE when calibrated to save ~2ms drawing
             show_compass = ENABLE_HEAD_POSE and isinstance(res, dict) and (not PERFORMANCE_MODE or not head_info.get("calibrated", True) or DEBUG_MODE)
             if show_compass:
@@ -615,10 +635,14 @@ def main():
 
     finally:
         print(f"[System] Avg FPS: {sum(fps_hist)/len(fps_hist) if fps_hist else 0:.1f} over {frame_count} frames")
+        if serial_ctrl:
+            serial_ctrl.close()
         tracker.close()
         cam.stop()
         cv2.destroyAllWindows()
 
 
+
 if __name__ == "__main__":
     main()
+    
